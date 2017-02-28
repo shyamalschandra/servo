@@ -119,8 +119,6 @@ impl Runnable for ImageResponseHandlerRunnable {
 struct ImageContext {
     /// The element that initiated the request.
     elem: Trusted<HTMLImageElement>,
-    /// The initial URL requested.
-    url: ServoUrl,
     /// Indicates whether the request failed, and why
     status: Result<(), NetworkError>,
     /// The cache ID for this request.
@@ -171,11 +169,9 @@ impl FetchResponseListener for ImageContext {
 
     fn process_response_eof(&mut self, response: Result<(), NetworkError>) {
         let elem = self.elem.root();
-        let document = document_from_node(&*elem);
         let image_cache = self.image_cache();
         image_cache.notify_pending_response(self.id,
                                             FetchResponseMsg::ProcessResponseEOF(response));
-        document.finish_load(LoadType::Image(self.url.clone()));
     }
 }
 
@@ -275,7 +271,9 @@ impl HTMLImageElement {
             .. RequestInit::default()
         };
 
-        document.fetch_async(LoadType::Image(img_url), request, action_sender);
+        // This is a background load because the load blocker already fulfills the
+        // purpose of delaying the document's load event.
+        document.loader().fetch_async_background(request, action_sender);
     }
 
     fn process_image_response(&self, image: ImageResponse) {
@@ -632,6 +630,15 @@ impl HTMLImageElementMethods for HTMLImageElement {
 impl VirtualMethods for HTMLImageElement {
     fn super_type(&self) -> Option<&VirtualMethods> {
         Some(self.upcast::<HTMLElement>() as &VirtualMethods)
+    }
+
+    fn adopting_steps(&self, old_doc: &Document) {
+        self.super_type().unwrap().adopting_steps(old_doc);
+
+        let elem = self.upcast::<Element>();
+        let document = document_from_node(self);
+        self.update_image(Some((elem.get_string_attribute(&local_name!("src")),
+                                document.base_url())));
     }
 
     fn attribute_mutated(&self, attr: &Attr, mutation: AttributeMutation) {
